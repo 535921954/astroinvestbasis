@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import random
 import matplotlib.pyplot as plt
 from scipy import stats
+import requests
 
 # 比特币创始信息（西五区时间2009年1月11日9:00）
 BITCOIN_FOUNDATION_TIME = datetime(2009, 1, 11, 9, 0)
@@ -329,14 +330,20 @@ def get_real_price_data(start_date, end_date):
     
     # 处理价格数据
     prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
-    prices['date'] = pd.to_datetime(prices['timestamp'], unit='ms')
+    prices['date'] = pd.to_datetime(prices['timestamp'], unit='ms').apply(lambda x:x.strftime("%Y-%m-%d"))
     prices['daily_change'] = prices['price'].pct_change() * 100
+    prices['daily_change'] = prices['daily_change'].apply(lambda x:round(x, 2))
+    prices['price'] = prices['price'].apply(lambda x:round(x, 2))
     
-    return prices[['date', 'price', 'daily_change']]
+    print(f'{prices.columns}')
+    print(f'{prices.index}')
+    print(f'{prices.shape}')
+
+    prices.rename(columns={'date': '日期', 'price': '价格', 'daily_change': '日涨跌幅'}, inplace=True)
+
+    return prices[['日期', '价格', '日涨跌幅']]
 
     
-
-
 
 def analyze_correlation(astrology_df, price_df):
     """分析星盘评分与价格变动的相关性"""
@@ -401,8 +408,8 @@ def analyze_correlation(astrology_df, price_df):
 
 def main():
     # 设置分析时间段
-    start_date = "2025-06-01"
-    end_date = "2025-08-01"
+    start_date = "2025-05-01"
+    end_date = "2025-06-01"
     
     print("=" * 70)
     print(f"比特币星盘分析报告生成")
@@ -417,7 +424,7 @@ def main():
     report_file, astrology_df = create_excel_report(natal_chart, daily_data, start_date, end_date)
     
     # 模拟价格数据（实际应用应使用真实数据）
-    price_df = simulate_price_data(date_range)
+    price_df = get_real_price_data(start_date, end_date)
 
     
     # 分析相关性
