@@ -6,6 +6,11 @@ import random
 import matplotlib.pyplot as plt
 from scipy import stats
 import requests
+import swisseph as swe
+
+
+# 设置 ephemeris 文件路径（首次运行会自动下载）
+swe.set_ephe_path('/tmp')  # 或本地任意可写目录
 
 # 比特币创始信息（西五区时间2009年1月11日9:00）
 BITCOIN_FOUNDATION_TIME = datetime(2009, 1, 11, 9, 0)
@@ -45,13 +50,17 @@ TIME_FACTORS = {
 }
 
 def calculate_natal_chart():
-    """计算比特币的本命星盘"""
+    """用真实天文数据计算比特币的本命星盘"""
     natal_positions = {}
-    for planet in PLANETS:
-        # 生成随机但合理的行星位置（0-360度）
-        natal_positions[f"{planet}_经度"] = round(np.random.uniform(0, 360), 2)
-        natal_positions[f"{planet}_纬度"] = round(np.random.uniform(-5, 5), 2)
-    
+    jd = swe.julday(2009, 1, 11, 9.0, swe.GREG_CAL)  # 比特币创始时间
+    for planet, pid in zip(PLANETS, [
+        swe.SUN, swe.MOON, swe.MERCURY, swe.VENUS, swe.MARS,
+        swe.JUPITER, swe.SATURN, swe.URANUS, swe.NEPTUNE, swe.PLUTO
+    ]):
+        result, ret = swe.calc_ut(jd, pid)
+        lon, lat, dist = result[0:3]
+        natal_positions[f"{planet}_经度"] = round(lon, 2)
+        natal_positions[f"{planet}_纬度"] = round(lat, 2)
     return {
         '资产': '比特币',
         '创始时间': BITCOIN_FOUNDATION_TIME.strftime("%Y-%m-%d %H:%M:%S") + " (西五区)",
@@ -60,25 +69,19 @@ def calculate_natal_chart():
     }
 
 def calculate_daily_transit(date, natal_positions):
-    """计算指定日期的行运盘"""
+    """用真实天文数据计算指定日期的行运盘"""
     transit_positions = {}
-    for planet in PLANETS:
-        # 基于本命盘位置生成每日变化
-        base_lon = natal_positions[f"{planet}_经度"]
-        base_lat = natal_positions[f"{planet}_纬度"]
-        
-        # 根据行星速度生成变化
-        if planet in FAST_MOVING_PLANETS:
-            lon_change = np.random.uniform(-1.5, 1.5)
-            lat_change = np.random.uniform(-0.5, 0.5)
-        else:  # 慢速行星
-            lon_change = np.random.uniform(-0.3, 0.3)
-            lat_change = np.random.uniform(-0.1, 0.1)
-        
-        transit_positions[f"{planet}_经度"] = round((base_lon + lon_change * 30) % 360, 2)
-        transit_positions[f"{planet}_纬度"] = round(base_lat + lat_change, 2)
-    
+    jd = swe.julday(date.year, date.month, date.day, 12.0, swe.GREG_CAL)  # 用中午12点
+    for planet, pid in zip(PLANETS, [
+        swe.SUN, swe.MOON, swe.MERCURY, swe.VENUS, swe.MARS,
+        swe.JUPITER, swe.SATURN, swe.URANUS, swe.NEPTUNE, swe.PLUTO
+    ]):
+        result, ret = swe.calc_ut(jd, pid)
+        lon, lat, dist = result[0:3]
+        transit_positions[f"{planet}_经度"] = round(lon, 2)
+        transit_positions[f"{planet}_纬度"] = round(lat, 2)
     return transit_positions
+
 
 def calculate_aspects(natal_positions, transit_positions):
     """计算本命盘与行运盘之间的相位"""
@@ -212,8 +215,8 @@ def generate_bitcoin_report(start_date, end_date):
     
     return natal_chart, daily_data, date_range
 
-def create_excel_report(natal_chart, daily_data, start_date, end_date):
-    """创建Excel报告"""
+def create_excel_report(natal_chart, daily_data, start_date, end_date, price_df=None):
+    """创建Excel报告，支持合并价格数据和预测准确性标记"""
     # 创建本命星盘数据框
     natal_df = pd.DataFrame([{
         "资产": natal_chart['资产'],
@@ -228,6 +231,20 @@ def create_excel_report(natal_chart, daily_data, start_date, end_date):
     
     # 创建每日数据框
     daily_df = pd.DataFrame(daily_data)
+    
+    # 合并价格数据
+    if price_df is not None:
+        daily_df = pd.merge(daily_df, price_df, on="日期", how="left")
+    # 填充缺失值，避免KeyError
+        daily_df['价格'] = daily_df['价格'].fillna(0)
+        daily_df['日涨跌幅'] = daily_df['日涨跌幅'].fillna(0)
+        daily_df['预测方向'] = daily_df['吉凶评级'].map({'利好': 1, '利空': -1, '中性': 0})
+        daily_df['实际方向'] = daily_df['日涨跌幅'].apply(lambda x: 1 if x > 1 else (-1 if x < -1 else 0))
+        daily_df['预测是否正确'] = daily_df.apply(
+            lambda row: '正确' if row['预测方向'] == row['实际方向'] and row['预测方向'] != 0 else (
+                '中性' if row['预测方向'] == 0 else '错误'
+            ), axis=1
+        )
     
     # 统计吉凶分布
     luck_stats = daily_df['吉凶评级'].value_counts()
@@ -258,7 +275,7 @@ def create_excel_report(natal_chart, daily_data, start_date, end_date):
         workbook = writer.book
         daily_sheet = writer.sheets['每日分析']
         
-        # 设置列宽
+        # 设置列宽（新增价格和涨跌幅两列）
         daily_sheet.set_column('A:A', 12)  # 日期
         daily_sheet.set_column('B:B', 50)  # 相位
         daily_sheet.set_column('C:C', 30)  # 短期相位
@@ -269,6 +286,11 @@ def create_excel_report(natal_chart, daily_data, start_date, end_date):
         daily_sheet.set_column('H:H', 12)  # 吉凶评级
         daily_sheet.set_column('I:I', 12)  # 短期相位数
         daily_sheet.set_column('J:J', 12)  # 长期相位数
+        daily_sheet.set_column('K:K', 14)  # 价格
+        daily_sheet.set_column('L:L', 14)  # 日涨跌幅
+        daily_sheet.set_column('M:M', 12)  # 预测方向
+        daily_sheet.set_column('N:N', 12)  # 实际方向
+        daily_sheet.set_column('O:O', 14)  # 预测是否正确
         
         # 添加条件格式
         format_good = workbook.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100'})
@@ -294,61 +316,69 @@ def create_excel_report(natal_chart, daily_data, start_date, end_date):
             'value': '中性',
             'format': format_neutral
         })
+        # 预测是否正确高亮
+        daily_sheet.conditional_format('O2:O1000', {
+            'type': 'text',
+            'criteria': 'containing',
+            'value': '正确',
+            'format': format_good
+        })
+        daily_sheet.conditional_format('O2:O1000', {
+            'type': 'text',
+            'criteria': 'containing',
+            'value': '错误',
+            'format': format_bad
+        })
     
     print(f"报告已生成: {os.path.abspath(filename)}")
     return filename, daily_df
 
-def simulate_price_data(date_range):
-    """模拟比特币价格数据（实际应用应使用真实数据）"""
-    prices = []
-    current_price = 60000  # 起始价格
-    
-    for date in date_range:
-        # 生成每日价格变化 (-5% 到 +5%)
-        daily_change = random.uniform(-0.05, 0.05)
-        current_price *= (1 + daily_change)
-        
-        prices.append({
-            "日期": date.strftime("%Y-%m-%d"),
-            "价格": round(current_price, 2),
-            "日涨跌幅": round(daily_change * 100, 2)
-        })
-    
-    return pd.DataFrame(prices)
+
+
 
 def get_real_price_data(start_date, end_date):
-    """从CoinGecko获取真实价格数据"""
-    url = f"https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
+    """从CoinGecko获取真实比特币价格数据"""
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
+    # 转为int秒级时间戳
+    from_ts = int(pd.Timestamp(start_date).timestamp())
+    to_ts = int(pd.Timestamp(end_date).timestamp())
     params = {
         'vs_currency': 'usd',
-        'from': int(pd.Timestamp(start_date).timestamp()),
-        'to': int(pd.Timestamp(end_date).timestamp())
+        'from': from_ts,
+        'to': to_ts
     }
-    
     response = requests.get(url, params=params)
+    if response.status_code != 200:
+        print("API请求失败:", response.status_code, response.text)
+        return None
     data = response.json()
-    
-    # 处理价格数据
-    prices = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
-    prices['date'] = pd.to_datetime(prices['timestamp'], unit='ms').apply(lambda x:x.strftime("%Y-%m-%d"))
-    prices['daily_change'] = prices['price'].pct_change() * 100
-    prices['daily_change'] = prices['daily_change'].apply(lambda x:round(x, 2))
-    prices['price'] = prices['price'].apply(lambda x:round(x, 2))
-    
-    print(f'{prices.columns}')
-    print(f'{prices.index}')
-    print(f'{prices.shape}')
-
-    prices.rename(columns={'date': '日期', 'price': '价格', 'daily_change': '日涨跌幅'}, inplace=True)
-
+    # 解析价格数据
+    prices = pd.DataFrame(data['prices'], columns=['timestamp', '价格'])
+    prices['日期'] = pd.to_datetime(prices['timestamp'], unit='ms').dt.strftime('%Y-%m-%d')
+    prices['价格'] = prices['价格'].astype(float)
+    # 计算日涨跌幅
+    prices['日涨跌幅'] = prices['价格'].pct_change() * 100
+    prices['日涨跌幅'] = prices['日涨跌幅'].fillna(0)
+    # 去重（有时API会返回同一天多条数据，保留每日最后一条）
+    prices = prices.groupby('日期').last().reset_index()
     return prices[['日期', '价格', '日涨跌幅']]
-
     
+
+
 
 def analyze_correlation(astrology_df, price_df):
     """分析星盘评分与价格变动的相关性"""
-    # 合并数据
-    merged_df = pd.merge(astrology_df, price_df, on="日期")
+    
+    # 合并数据如果astrology_df未合并
+    if '日涨跌幅' not in astrology_df.columns:
+        merged_df = pd.merge(astrology_df, price_df, on="日期", how="left")
+        # 填充缺失，确保不会KeyError
+        merged_df['日涨跌幅'] = merged_df['日涨跌幅'].fillna(0)
+        merged_df['价格'] = merged_df['价格'].fillna(0)
+        # 调试输出
+        # print("merged_df columns:", merged_df.columns)
+    else:
+        merged_df = astrology_df
     
     # 计算相关性
     corr_score = merged_df['综合分数'].corr(merged_df['日涨跌幅'])
@@ -361,7 +391,7 @@ def analyze_correlation(astrology_df, price_df):
     
     # 只考虑有明确预测的日子
     valid_days = merged_df[merged_df['预测方向'] != 0]
-    accuracy = sum(valid_days['预测方向'] == valid_days['实际方向']) / len(valid_days)
+    accuracy = sum(valid_days['预测方向'] == valid_days['实际方向']) / len(valid_days) if len(valid_days) > 0 else 0
     
     # 绘制图表
     plt.figure(figsize=(12, 8))
@@ -408,24 +438,26 @@ def analyze_correlation(astrology_df, price_df):
 
 def main():
     # 设置分析时间段
-    start_date = "2025-05-01"
-    end_date = "2025-06-01"
+    start_date = "2024-11-01"
+    end_date = "2025-07-01"
     
     print("=" * 70)
     print(f"比特币星盘分析报告生成")
     print(f"创始时间: {BITCOIN_FOUNDATION_TIME.strftime('%Y-%m-%d %H:%M:%S')} (西五区)")
     print(f"分析时段: {start_date} 至 {end_date}")
     print("=" * 70)
+
     
     # 生成报告
     natal_chart, daily_data, date_range = generate_bitcoin_report(start_date, end_date)
+
+     #      获得并使用真实数据
+    price_df = get_real_price_data(start_date, end_date)
+    print(price_df)
     
     # 创建Excel报告
-    report_file, astrology_df = create_excel_report(natal_chart, daily_data, start_date, end_date)
+    report_file, astrology_df = create_excel_report(natal_chart, daily_data, start_date, end_date, price_df=price_df)
     
-    # 模拟价格数据（实际应用应使用真实数据）
-    price_df = get_real_price_data(start_date, end_date)
-
     
     # 分析相关性
     correlation_results = analyze_correlation(astrology_df, price_df)
